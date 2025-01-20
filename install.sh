@@ -6,6 +6,7 @@
 set -e  # Exit immediately if a command exits with a non-zero status
 
 # new comment
+#123
 
 echo "Updating system packages..."
 sudo apt update && sudo apt upgrade -y
