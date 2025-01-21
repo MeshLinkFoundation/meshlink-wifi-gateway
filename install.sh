@@ -17,6 +17,9 @@ sudo systemctl unmask hostapd
 sudo systemctl enable hostapd
 sudo systemctl enable dnsmasq
 
+
+sudo apt-get install libmicrohttpd-dev
+
 echo "Configuring hostapd..."
 cat <<EOF | sudo tee /etc/hostapd/hostapd.conf
 interface=wlan0
