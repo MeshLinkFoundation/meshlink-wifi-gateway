@@ -32,6 +32,8 @@ wpa=2
 wpa_passphrase=meshlink2025
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
+ignore_broadcast_ssid=0
+beacon_int=100
 EOF
 
 echo "Updating hostapd defaults..."
@@ -66,8 +68,20 @@ sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 
 sudo sh -c "iptables-save > /etc/iptables/rules.v4"
 
-echo "Starting services..."
-sudo systemctl start hostapd
-sudo systemctl start dnsmasq
+echo "Configuring wireless interface for AP mode..."
+# Unblock wireless interface
+sudo rfkill unblock wifi
+# Bring down the interface
+sudo ifconfig wlan0 down
+# Configure the interface with a static IP
+sudo ifconfig wlan0 192.168.50.1 netmask 255.255.255.0
+# Bring up the interface
+sudo ifconfig wlan0 up
+# Wait a moment for the interface to stabilize
+sleep 2
 
-echo "Hotspot setup complete! Please connect to the SSID 'MeshLink-Hotspot' using the password 'meshlink2025'."
+echo "Starting services..."
+sudo systemctl restart hostapd
+sudo systemctl restart dnsmasq
+
+echo "Hotspot setup complete! Please connect to the SSID 'project123' using the password 'meshlink2025'."
