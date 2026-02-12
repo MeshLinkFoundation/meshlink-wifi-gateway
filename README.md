@@ -1,6 +1,6 @@
 # MeshLink WiFi Gateway
 
-WiFi access point + captive portal setup for the MeshLink decentralized internet sharing protocol. Turns a Raspberry Pi into a WiFi hotspot where clients must authenticate through the MeshLink landing page before getting internet access.
+WiFi access point + captive portal setup for the MeshLink decentralized internet sharing protocol. Turns a Raspberry Pi into a WiFi hotspot that shows a "Sign in to WiFi" landing page when clients connect.
 
 ## Tested On
 
@@ -14,27 +14,30 @@ WiFi access point + captive portal setup for the MeshLink decentralized internet
 Client connects to "MeshLink" WiFi
          |
          v
-   Internet blocked (iptables FORWARD DROP)
-   HTTP redirected to captive portal
+   Gets IP via DHCP, internet works immediately
+   (FORWARD policy: ACCEPT)
          |
          v
+   Device does HTTP captive portal check
+   (e.g. GET http://connectivitycheck.gstatic.com/generate_204)
+         |
+         v
+   iptables REDIRECT intercepts port 80 traffic
+   Sends it to the MeshLink broker on port 3000
+         |
+         v
+   Broker returns 200 HTML instead of 204
    Device detects captive portal
    Shows "Sign in to WiFi" dialog
          |
          v
    Client sees MeshLink landing page
    Selects tier (Free / Paid)
-         |
-         v
-   Broker adds client IP to meshlink_auth ipset
-   iptables allows FORWARD for that IP
-         |
-         v
-   Client has internet access
-   (expires after tier duration)
 ```
 
 ## Quick Start
+
+The `install.sh` script handles everything end-to-end: AP setup, DHCP/DNS, NAT, captive portal redirect, Node.js install, broker build, and systemd services.
 
 ```bash
 # SSH into your Pi
@@ -44,39 +47,11 @@ ssh meshlink@<pi-ip-address>
 git clone <repo-url>
 cd meshlink/meshlink-wifi-gateway
 
-# Run the AP + captive portal installer
+# Run the installer
 bash install.sh
-
-# Then deploy the broker (captive portal web app)
-cd ../broker
-npm install
-npm run build
-
-# Create the broker service
-sudo tee /etc/systemd/system/meshlink-broker.service > /dev/null <<EOF
-[Unit]
-Description=MeshLink Broker (Captive Portal + API)
-After=network.target meshlink-network.service hostapd.service dnsmasq.service
-Wants=meshlink-network.service
-
-[Service]
-Type=simple
-User=meshlink
-WorkingDirectory=/home/meshlink/meshlink/broker
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-Environment=PORT=3000
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable meshlink-broker
-sudo systemctl start meshlink-broker
 ```
+
+That's it. The script installs all packages, configures the AP, builds the broker, and starts all services.
 
 ## Default Configuration
 
@@ -103,37 +78,42 @@ Internet
 [eth0] Raspberry Pi 5 [wlan0] ──── WiFi clients
 192.168.0.x (DHCP)     192.168.50.1 (AP)
    |                      |
-   | NAT/masquerade        | FORWARD policy: DROP
-   |<──── only for ────────| (allowed only for IPs
-   |   meshlink_auth IPs   |  in meshlink_auth ipset)
+   | NAT/masquerade        | FORWARD policy: ACCEPT
+   |<─────────────────────-| (all clients get internet)
+   |                      |
                      DHCP: 192.168.50.10-100
-                     DNS:  192.168.50.1 (Pi)
+                     DNS:  192.168.50.1 (Pi → 8.8.8.8)
+                     Port 80: REDIRECT → broker:3000
 ```
 
 ## Captive Portal Flow
 
 1. Client connects to MeshLink WiFi, gets IP via DHCP
-2. DNS resolves via the Pi's dnsmasq (works because it's INPUT, not FORWARD)
-3. FORWARD chain drops all traffic from unauthenticated clients
-4. HTTP (port 80) requests are DNAT'd to the broker on port 3000
-5. Device OS detects captive portal, shows "Sign in to WiFi"
-6. Client selects tier on the MeshLink landing page
-7. Broker calls `ipset add meshlink_auth <client-ip>`
-8. FORWARD chain now accepts traffic from that IP
-9. Client has internet access until their session expires
-10. On expiry, broker calls `ipset del meshlink_auth <client-ip>`
+2. DNS resolves normally via the Pi's dnsmasq (forwards to 8.8.8.8)
+3. Device does HTTP captive portal check (e.g. `GET /generate_204` to Google)
+4. iptables `REDIRECT` intercepts port 80 traffic and sends it to broker on port 3000
+5. Broker returns 200 HTML (not 204), triggering captive portal detection
+6. Device shows "Sign in to WiFi" dialog with the MeshLink landing page
+7. Client selects a tier on the landing page
+
+### Important: Why REDIRECT, not DNAT or DNS hijacking
+
+- **REDIRECT** (not DNAT) is required because DNAT to a local IP can have routing issues
+- **Do NOT hijack DNS** for captive portal detection domains — Android/MIUI switches to HTTPS-only when it sees local IPs in DNS responses, which breaks detection since we don't have a TLS cert
+- **Do NOT redirect port 443** — TLS handshake failures are not interpreted as "captive portal" by Android
+- The working approach: let DNS resolve normally, REDIRECT port 80 only, broker returns HTML
 
 ## Files Modified
 
 | File | Purpose |
 |------|---------|
 | `/etc/hostapd/hostapd.conf` | Access point configuration |
-| `/etc/dnsmasq.conf` | DHCP and DNS (clients use Pi as DNS) |
+| `/etc/dnsmasq.conf` | DHCP and DNS for WiFi clients only |
+| `/etc/default/dnsmasq` | Disables resolvconf integration (prevents DNS breakage) |
 | `/etc/sysctl.d/99-meshlink.conf` | IP forwarding |
-| `/etc/iptables/rules.v4` | Captive portal firewall rules |
-| `/etc/iptables/ipset.rules` | Persistent ipset rules |
+| `/etc/iptables/rules.v4` | NAT + captive portal REDIRECT rules |
 | `/etc/NetworkManager/conf.d/99-meshlink-unmanaged.conf` | NM ignores wlan0 |
-| `/etc/systemd/system/meshlink-network.service` | Boot persistence |
+| `/etc/systemd/system/meshlink-network.service` | Boot persistence (rfkill, IP, iptables) |
 | `/etc/systemd/system/meshlink-broker.service` | Broker auto-start |
 | `/etc/sudoers.d/meshlink-network` | Broker can manage iptables/ipset |
 
@@ -141,7 +121,7 @@ Internet
 
 | Service | Purpose |
 |---------|---------|
-| `meshlink-network` | Boot: rfkill, wlan0 IP, ipset restore, iptables restore |
+| `meshlink-network` | Boot: rfkill unblock, wlan0 IP, iptables restore |
 | `hostapd` | WiFi access point |
 | `dnsmasq` | DHCP + DNS for clients |
 | `meshlink-broker` | Node.js captive portal web app + API |
@@ -150,34 +130,15 @@ Internet
 
 ### Captive portal not showing on device
 
-Make sure the device has **forgotten and reconnected** to MeshLink WiFi to get
-the latest DHCP settings (DNS must point to 192.168.50.1).
+**Forget and reconnect** to MeshLink WiFi — the device only checks for captive portals on fresh connections.
 
 ```bash
-# Verify FORWARD policy is DROP
-sudo iptables -L FORWARD -n
+# Verify REDIRECT rule exists
+sudo iptables -t nat -L PREROUTING -n -v
 
-# Verify PREROUTING redirect exists
-sudo iptables -t nat -L PREROUTING -n
-
-# Check that meshlink_auth is empty (no pre-authenticated IPs)
-sudo ipset list meshlink_auth
-
-# Check broker is reachable
+# Check broker is running and reachable
+sudo systemctl status meshlink-broker
 curl -s http://192.168.50.1:3000/api/health
-```
-
-### Client selected tier but still no internet
-
-```bash
-# Check broker logs
-sudo journalctl -u meshlink-broker -n 30
-
-# Verify client IP was added to ipset
-sudo ipset list meshlink_auth
-
-# Manually grant access to test
-sudo ipset add meshlink_auth 192.168.50.XX -exist
 ```
 
 ### WiFi AP not starting
@@ -189,6 +150,14 @@ sudo rfkill list wlan
 ip addr show wlan0
 ```
 
+### Pi lost SSH / DNS broken
+
+This can happen if dnsmasq's resolvconf helper overwrites `/etc/resolv.conf`. The installer prevents this with `IGNORE_RESOLVCONF=yes` in `/etc/default/dnsmasq` and `bind-interfaces` + `listen-address` in `/etc/dnsmasq.conf`. If it does happen:
+
+1. Power cycle the Pi
+2. Check `/etc/resolv.conf` points to your router (e.g. `nameserver 192.168.0.1`), not to `127.0.0.1`
+3. Re-run the installer
+
 ### After reboot, captive portal doesn't work
 
 ```bash
@@ -199,7 +168,7 @@ sudo systemctl restart meshlink-network hostapd dnsmasq meshlink-broker
 
 ## Re-running the Installer
 
-The script is idempotent. It flushes iptables/ipset rules before re-adding them and backs up config files only once.
+The script is idempotent. It flushes iptables rules before re-adding them and backs up config files only once.
 
 ## Uninstall
 
@@ -211,11 +180,11 @@ sudo rm /etc/systemd/system/meshlink-broker.service
 sudo rm /etc/NetworkManager/conf.d/99-meshlink-unmanaged.conf
 sudo rm /etc/sysctl.d/99-meshlink.conf
 sudo rm /etc/sudoers.d/meshlink-network
+sudo rm /etc/default/dnsmasq
 sudo cp /etc/dnsmasq.conf.orig /etc/dnsmasq.conf 2>/dev/null
 sudo iptables -P FORWARD ACCEPT
 sudo iptables -t nat -F
 sudo iptables -F FORWARD
-sudo ipset destroy meshlink_auth 2>/dev/null
 sudo systemctl restart NetworkManager
 sudo systemctl daemon-reload
 ```
