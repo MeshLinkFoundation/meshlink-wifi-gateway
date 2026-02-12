@@ -151,6 +151,8 @@ fi
 sudo tee /etc/dnsmasq.conf > /dev/null <<DNSEOF
 # MeshLink DHCP/DNS Configuration
 interface=$WLAN_IFACE
+listen-address=$AP_IP
+bind-interfaces
 dhcp-range=$DHCP_RANGE_START,$DHCP_RANGE_END,$AP_NETMASK,$DHCP_LEASE
 domain-needed
 bogus-priv
