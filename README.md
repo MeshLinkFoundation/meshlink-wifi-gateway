@@ -53,6 +53,17 @@ bash install.sh
 
 That's it. The script installs all packages, configures the AP, builds the broker, and starts all services.
 
+### Stripe Payments (Optional)
+
+To accept paid tiers via Stripe, create a `.env` file in the broker directory before running the installer (or any time after):
+
+```bash
+echo "STRIPE_SECRET_KEY=sk_test_yourKeyHere" > /home/meshlink/meshlink/broker/.env
+sudo systemctl restart meshlink-broker
+```
+
+The broker service loads this file via `EnvironmentFile`. See `broker/STRIPE_SETUP.md` for full details.
+
 ## Default Configuration
 
 | Setting | Value |

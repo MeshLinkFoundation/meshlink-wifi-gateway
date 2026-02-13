@@ -56,7 +56,7 @@ echo "────────────────────────�
 
 info "Installing packages..."
 sudo apt update -y
-sudo apt install -y hostapd dnsmasq iptables iw rfkill
+sudo apt install -y hostapd dnsmasq iptables ipset iw rfkill
 ok "Packages installed"
 
 # ─── 2. Stop services while configuring ───────────────────────────────────────
@@ -155,35 +155,48 @@ SYSEOF
 sudo /usr/sbin/sysctl -w net.ipv4.ip_forward=1 > /dev/null
 ok "IP forwarding enabled"
 
-# ─── 9. iptables (NAT + captive portal redirect) ─────────────────────────────
-# All clients get internet. HTTP port 80 is redirected to the broker so
-# devices auto-detect the captive portal and show "Sign in to WiFi".
+# ─── 9. ipset + iptables (access control + captive portal) ─────────────────
+# Clients are blocked by default (FORWARD DROP). When the broker grants access
+# it adds the client IP to meshlink_auth ipset, which allows FORWARD.
+# Port 80 REDIRECT and DNS still work for blocked clients (INPUT chain, not
+# FORWARD) so they can reach the captive portal to purchase a package.
 
-info "Configuring iptables..."
+info "Configuring ipset + iptables..."
+
+# Create ipsets for access control and per-tier tracking
+sudo ipset create meshlink_auth hash:ip -exist
+sudo ipset create free_clients hash:ip -exist
+sudo ipset create lightweight_clients hash:ip -exist
+sudo ipset create premium_clients hash:ip -exist
 
 sudo iptables -F FORWARD 2>/dev/null || true
 sudo iptables -t nat -F 2>/dev/null || true
 
-# FORWARD: allow all traffic (no blocking for now)
-sudo iptables -P FORWARD ACCEPT
-sudo iptables -A FORWARD -i "$WLAN_IFACE" -o "$WAN_IFACE" -j ACCEPT
+# FORWARD: block by default, allow only authenticated clients
+sudo iptables -P FORWARD DROP
+sudo iptables -A FORWARD -i "$WLAN_IFACE" -o "$WAN_IFACE" -m set --match-set meshlink_auth src -j ACCEPT
 sudo iptables -A FORWARD -i "$WAN_IFACE" -o "$WLAN_IFACE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# REJECT HTTPS (port 443) instead of silent DROP — iOS/Android captive portal
+# detection sends HTTPS probes first. Silent DROP causes a timeout; REJECT with
+# tcp-reset gives an immediate failure so the device falls back to HTTP (port 80)
+# which gets REDIRECT'd to the broker captive portal.
+sudo iptables -A FORWARD -i "$WLAN_IFACE" -o "$WAN_IFACE" -p tcp --dport 443 -j REJECT --reject-with tcp-reset
 
 # NAT
 sudo iptables -t nat -A POSTROUTING -o "$WAN_IFACE" -j MASQUERADE
 
 # Captive portal: redirect HTTP (port 80) to the broker
-# Devices check http://connectivitycheck.gstatic.com/generate_204 (Android),
-# http://captive.apple.com/hotspot-detect.html (Apple), etc.
-# REDIRECT intercepts any port 80 traffic and sends it to the broker.
-# The broker returns 200 HTML instead of 204, triggering "Sign in to WiFi".
+# REDIRECT works in PREROUTING → INPUT, so it reaches the broker even when
+# FORWARD is DROP. Devices see 200 HTML instead of 204, triggering
+# "Sign in to WiFi".
 sudo iptables -t nat -A PREROUTING -i "$WLAN_IFACE" -p tcp --dport 80 -j REDIRECT --to-port "$BROKER_PORT"
 
 # Save rules
 sudo mkdir -p /etc/iptables
 sudo sh -c "iptables-save > /etc/iptables/rules.v4"
 
-ok "iptables configured (NAT + captive portal redirect)"
+ok "iptables configured (FORWARD DROP + ipset auth + captive portal)"
 
 # ─── 10. Boot persistence ────────────────────────────────────────────────────
 
@@ -203,6 +216,10 @@ ExecStart=/usr/sbin/rfkill unblock wlan
 ExecStart=/usr/sbin/ip link set $WLAN_IFACE up
 ExecStart=/usr/sbin/ip addr flush dev $WLAN_IFACE
 ExecStart=/usr/sbin/ip addr add $AP_IP/24 dev $WLAN_IFACE
+ExecStart=/usr/sbin/ipset create meshlink_auth hash:ip -exist
+ExecStart=/usr/sbin/ipset create free_clients hash:ip -exist
+ExecStart=/usr/sbin/ipset create lightweight_clients hash:ip -exist
+ExecStart=/usr/sbin/ipset create premium_clients hash:ip -exist
 ExecStart=/usr/sbin/iptables-restore /etc/iptables/rules.v4
 
 [Install]
@@ -264,6 +281,7 @@ WorkingDirectory=$BROKER_DIR
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
+EnvironmentFile=-$BROKER_DIR/.env
 Environment=NODE_ENV=production
 Environment=PORT=$BROKER_PORT
 
