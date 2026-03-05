@@ -56,7 +56,7 @@ echo "────────────────────────�
 
 info "Installing packages..."
 sudo apt update -y
-sudo apt install -y hostapd dnsmasq iptables ipset iw rfkill
+sudo apt install -y hostapd dnsmasq iptables ipset iw rfkill iproute2
 ok "Packages installed"
 
 # ─── 2. Stop services while configuring ───────────────────────────────────────
@@ -163,11 +163,8 @@ ok "IP forwarding enabled"
 
 info "Configuring ipset + iptables..."
 
-# Create ipsets for access control and per-tier tracking
-sudo ipset create meshlink_auth hash:ip -exist
-sudo ipset create free_clients hash:ip -exist
-sudo ipset create lightweight_clients hash:ip -exist
-sudo ipset create premium_clients hash:ip -exist
+# Create ipset with timeout support (timeout 0 = per-entry timeouts enabled, kernel auto-expires)
+sudo ipset create meshlink_auth hash:ip timeout 0 -exist
 
 sudo iptables -F FORWARD 2>/dev/null || true
 sudo iptables -t nat -F 2>/dev/null || true
@@ -216,10 +213,7 @@ ExecStart=/usr/sbin/rfkill unblock wlan
 ExecStart=/usr/sbin/ip link set $WLAN_IFACE up
 ExecStart=/usr/sbin/ip addr flush dev $WLAN_IFACE
 ExecStart=/usr/sbin/ip addr add $AP_IP/24 dev $WLAN_IFACE
-ExecStart=/usr/sbin/ipset create meshlink_auth hash:ip -exist
-ExecStart=/usr/sbin/ipset create free_clients hash:ip -exist
-ExecStart=/usr/sbin/ipset create lightweight_clients hash:ip -exist
-ExecStart=/usr/sbin/ipset create premium_clients hash:ip -exist
+ExecStart=/usr/sbin/ipset create meshlink_auth hash:ip timeout 0 -exist
 ExecStart=/usr/sbin/iptables-restore /etc/iptables/rules.v4
 
 [Install]
@@ -264,7 +258,7 @@ if [ -d "$BROKER_DIR" ]; then
     # Sudoers for broker network management
     CURRENT_USER=$(whoami)
     sudo tee /etc/sudoers.d/meshlink-network > /dev/null <<SUDEOF
-$CURRENT_USER ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/sbin/iptables-save, /usr/sbin/iptables-restore
+$CURRENT_USER ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/sbin/iptables-save, /usr/sbin/iptables-restore, /usr/sbin/tc
 SUDEOF
     sudo chmod 440 /etc/sudoers.d/meshlink-network
 

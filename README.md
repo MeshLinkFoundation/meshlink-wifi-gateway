@@ -64,6 +64,32 @@ sudo systemctl restart meshlink-broker
 
 The broker service loads this file via `EnvironmentFile`. See `broker/STRIPE_SETUP.md` for full details.
 
+### Remote Management with Tailscale (Optional)
+
+By default, the operator dashboard at `http://192.168.50.1:3000/admin` is only accessible from devices connected to the MeshLink AP or your local network. If you want to manage your node remotely — from a different network, on the go, etc. — you'll need a way to reach it. [Tailscale](https://tailscale.com) is a simple option that creates a private mesh VPN between your devices.
+
+```bash
+# On the Pi: install and authenticate
+curl -fsSL https://tailscale.com/install.sh | sudo sh
+sudo tailscale up
+# Follow the printed URL to log in with your Tailscale account
+```
+
+Install Tailscale on your laptop/phone too, and sign in with the same account. Then find the Pi's Tailscale IP:
+
+```bash
+tailscale ip -4
+# e.g. 100.125.251.114
+```
+
+The dashboard is now reachable from anywhere on your tailnet:
+
+```
+http://<pi-tailscale-ip>:3000/admin
+```
+
+Without Tailscale (or a similar solution like a VPN or reverse tunnel), you must be on the same local network as the Pi to access the dashboard.
+
 ## Default Configuration
 
 | Setting | Value |
