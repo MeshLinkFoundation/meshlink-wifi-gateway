@@ -1,6 +1,8 @@
 # MeshLink WiFi Gateway
 
-WiFi access point + captive portal setup for the MeshLink decentralized internet sharing protocol. Turns a Raspberry Pi into a WiFi hotspot that shows a "Sign in to WiFi" landing page when clients connect.
+WiFi access point + captive portal setup for the MeshLink internet-sharing platform. Turns a Raspberry Pi into a monetized WiFi hotspot — like Airbnb for your spare bandwidth.
+
+Most broadband connections run at a fraction of their capacity most of the time. MeshLink lets you share that excess with nearby devices and earn from it, the same way Uber monetizes idle driving time or Airbnb monetizes empty rooms. Plug a Pi into your router, run the installer, and guests nearby can pay for access to your connection through a captive portal you control.
 
 ## Tested On
 
